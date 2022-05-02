@@ -1,3 +1,7 @@
+# # Copyright (c) 2019-present, HuggingFace Inc.
+# All rights reserved.
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
 import os
 import logging
 import random
@@ -8,7 +12,7 @@ from pprint import pformat
 import torch
 import torch.nn.functional as F
 
-from transformersjjy import OpenAIGPTLMHeadModel, GPT2LMHeadModel, BertTokenizer
+from transformers import OpenAIGPTLMHeadModel, GPT2LMHeadModel, BertTokenizer
 
 SPECIAL_TOKENS = ["[CLS]", "[SEP]", "[PAD]", "[speaker1]", "[speaker2]"]
 
@@ -75,15 +79,11 @@ def sample_sequence(history, tokenizer, model, args, current_output=None):
         token_type_ids = torch.tensor(instance["token_type_ids"], dtype=torch.long, device=args.device).unsqueeze(0)
 
         logits, *_ = model(input_ids, token_type_ids=token_type_ids)
-        next_token_logits = logits[0, -1, :]
-        for id in set(current_output):
-            next_token_logits[id] /= args.repetition_penalty
-        next_token_logits = next_token_logits / args.temperature
-        next_token_logits = top_filtering(next_token_logits, top_k=args.top_k, top_p=args.top_p)
-        probs = F.softmax(next_token_logits, dim=-1)
+        logits = logits[0, -1, :] / args.temperature
+        logits = top_filtering(logits, top_k=args.top_k, top_p=args.top_p)
+        probs = F.softmax(logits, dim=-1)
 
         prev = torch.topk(probs, 1)[1] if args.no_sample else torch.multinomial(probs, 1)
-
         if i < args.min_length and prev.item() in special_tokens_ids:
             while prev.item() in special_tokens_ids:
                 prev = torch.multinomial(probs, num_samples=1)
@@ -98,20 +98,17 @@ def sample_sequence(history, tokenizer, model, args, current_output=None):
 def run():
     parser = ArgumentParser()
     parser.add_argument('--gpt2', action='store_true', help="use gpt2")
-    parser.add_argument("--model_checkpoint", type=str, default="",
-                        help="Path, url or short name of the model")
-    parser.add_argument("--max_history", type=int, default=5, help="Number of previous utterances to keep in history")
+    parser.add_argument("--model_checkpoint", type=str, default="", help="Path, url or short name of the model")
+    parser.add_argument("--max_history", type=int, default=2, help="Number of previous utterances to keep in history")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device (cuda or cpu)")
-    parser.add_argument("--no_sample", action='store_false', default=False, help="Set to use greedy decoding instead of sampling")
+
+    parser.add_argument("--no_sample", action='store_true', help="Set to use greedy decoding instead of sampling")
     parser.add_argument("--max_length", type=int, default=30, help="Maximum length of the output utterances")
     parser.add_argument("--min_length", type=int, default=1, help="Minimum length of the output utterances")
     parser.add_argument("--seed", type=int, default=42, help="Seed")
-    parser.add_argument("--repetition_penalty", type=float, default=1.0, required=False,
-                        help="Repeat penalty parameter, which can be raised appropriately if the generated dialogue is \
-                              highly repetitive")
     parser.add_argument("--temperature", type=int, default=0.7, help="Sampling softmax temperature")
-    parser.add_argument("--top_k", type=int, default=5, help="Filter top-k tokens before sampling (<=0: no filtering)")
+    parser.add_argument("--top_k", type=int, default=0, help="Filter top-k tokens before sampling (<=0: no filtering)")
     parser.add_argument("--top_p", type=float, default=0.9,
                         help="Nucleus filtering (top-p) before sampling (<=0.0: no filtering)")
     args = parser.parse_args()
@@ -131,7 +128,7 @@ def run():
     logger.info("Get pretrained model and tokenizer")
     tokenizer_class = BertTokenizer
     model_class = OpenAIGPTLMHeadModel if not args.gpt2 else GPT2LMHeadModel
-    tokenizer = tokenizer_class.from_pretrained(args.model_checkpoint, do_lower_case=True, never_split=["[speaker1]", "[speaker2]"])
+    tokenizer = tokenizer_class.from_pretrained(args.model_checkpoint, do_lower_case=True)
     model = model_class.from_pretrained(args.model_checkpoint)
 
     model.to(args.device)
@@ -158,9 +155,6 @@ def run():
         history = history[-(2 * args.max_history + 1):]
         out_text = tokenizer.decode(out_ids, skip_special_tokens=True)
         print(out_text)
-        '''
-        modify
-        '''
 
 
 if __name__ == "__main__":
